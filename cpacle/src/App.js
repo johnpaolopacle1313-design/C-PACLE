@@ -5,6 +5,27 @@ const YEARS = Array.from({ length: 9 }, (_, index) => 2024 - index);
 const initialForm = { name: '', year: '', rating: '', cast: '', synopsis: '', poster: '' };
 const recommendation = (rating) => Number(rating) < 5 ? 'Not Recommended' : 'Highly Recommended';
 
+// Image files encoded as data URLs are much larger than the original file.  Resize
+// them before saving because localStorage has a small (usually ~5 MB) limit.
+const posterDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error('The selected image could not be read.'));
+  reader.onload = () => {
+    const image = new Image();
+    image.onerror = () => reject(new Error('The selected image could not be processed.'));
+    image.onload = () => {
+      const scale = Math.min(1, 640 / Math.max(image.width, image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    image.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
+
 function App() {
   const [movies, setMovies] = useState(() => {
     try { return JSON.parse(localStorage.getItem('movies')) || []; } catch { return []; }
@@ -14,7 +35,14 @@ function App() {
   const [editingIndex, setEditingIndex] = useState(null);
   const formRef = useRef(null);
 
-  useEffect(() => { localStorage.setItem('movies', JSON.stringify(movies)); }, [movies]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('movies', JSON.stringify(movies));
+    } catch (storageError) {
+      // Keep the current session usable even if browser storage is already full.
+      setError('Your browser storage is full, so this change cannot be saved after a refresh. Delete a movie or use smaller posters.');
+    }
+  }, [movies]);
   const update = (field, value) => { setForm((current) => ({ ...current, [field]: value })); setError(''); };
 
   const addMovie = (event) => {
@@ -30,10 +58,16 @@ function App() {
     }
     setForm(initialForm); setEditingIndex(null); event.currentTarget.reset();
   };
-  const selectPoster = (event) => {
+  const selectPoster = async (event) => {
     const file = event.target.files?.[0]; if (!file) return;
     if (!file.type.startsWith('image/')) { setError('Please choose an image file for the movie poster.'); event.target.value = ''; return; }
-    const reader = new FileReader(); reader.onload = () => update('poster', reader.result); reader.readAsDataURL(file);
+    try {
+      const poster = await posterDataUrl(file);
+      update('poster', poster);
+    } catch (imageError) {
+      setError(imageError.message);
+      event.target.value = '';
+    }
   };
   const clearForm = () => { setForm(initialForm); setError(''); setEditingIndex(null); formRef.current?.reset(); };
   const editMovie = (index) => {
